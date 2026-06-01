@@ -106,132 +106,93 @@ threads (e.g., 2, 4, 8) by setting the environment variable `OMP_NUM_THREADS`.
 
 #### 3. Performance Measurement
 
-For each test case (0 through 9 in the `data` folder):
+## Performance Results
 
-- Measure the **wall clock time** for:
-    - Naive matrix multiplication (`naive_matmul`).
-    - Cache-optimized matrix multiplication (`blocked_matmul`).
-    - Parallel matrix multiplication (`parallel_matmul`).
-- Use `omp_get_wtime()` for timing, as it provides high-resolution wall clock time.
-- Report the times in a table in your submission README.md, including:
-    - Test case number.
-    - Matrix dimensions (m × n × p).
-    - Wall clock time for each implementation (in seconds).
-    - Speedup of blocked and parallel implementations over the naive implementation.
+### Environment
+- **Platform**: GitHub Codespaces (Linux x86_64, 2 physical CPU cores)
+- **Compiler**: g++ with `-O3 -fopenmp`
+- **Methodology**: Each timing is the arithmetic mean of **5 independent runs**
+- **Default block size**: 64 (theoretical L1-cache-line alignment)
+- **Default thread count**: 4
 
-Example table format:
+### Main Results Table (Averaged over 5 runs)
 
-| Test Case | Dimensions (m × n × p) | Naive Time (s) | Blocked Time (s) | Parallel Time (s) | Blocked Speedup | Parallel Speedup |
-|-----------|------------------------|----------------|------------------|-------------------|-----------------|------------------|
-| 0         | 512 × 512 × 512        | 2.345          | 0.987            | 0.543             | 2.38×           | 4.32×            |
+| Case | Dimensions (m × n × p) | Naive (s) | Blocked (s) | Parallel (s) | Blocked Speedup | Parallel Speedup |
+|------|------------------------|-----------|-------------|--------------|-----------------|------------------|
+| 0    | 64 × 64 × 64           | 0.000209  | 0.000202    | 0.000227     | 1.04×           | 0.92×            |
+| 1    | 128 × 64 × 128         | 0.001096  | 0.000871    | 0.000740     | 1.26×           | 1.48×            |
+| 2    | 100 × 128 × 56         | 0.000691  | 0.000638    | 0.000922     | 1.08×           | 0.75×            |
+| 3    | 128 × 64 × 128         | 0.001541  | 0.001245    | 0.001014     | 1.24×           | 1.52×            |
+| 4    | 32 × 128 × 32          | 0.000160  | 0.000143    | 0.000309     | 1.12×           | 0.52×            |
+| 5    | 200 × 100 × 256        | 0.007707  | 0.007681    | 0.007275     | 1.00×           | 1.06×            |
+| 6    | 256 × 256 × 256        | 0.026578  | 0.021396    | 0.022247     | 1.24×           | 1.19×            |
+| 7    | 256 × 300 × 256        | 0.033655  | 0.026134    | 0.030615     | 1.29×           | 1.10×            |
+| 8    | 64 × 128 × 64          | 0.000499  | 0.000385    | 0.000419     | 1.30×           | 1.19×            |
+| 9    | 256 × 256 × 257        | 0.018924  | 0.013386    | 0.011839     | 1.41×           | 1.60×            |
 
----
+All implementations validated against `output.raw` with tolerance `1e-2`. All 10 cases pass for all three implementations.
 
-#### Matrix Storage and Memory Management
+### Block Size Experiment (Case 7: 256 × 300 × 256, the largest test case)
 
-- Row-major order for all matrices
-- Use C-style arrays with manual memory management (`malloc` or `new`, `free` or `delete`).
-- Do not use smart pointers.
+To find the optimal block size, the `blocked_matmul` was tested with four block sizes against the naive baseline. Each timing is averaged over 5 runs.
 
----
+| Block Size | Time (s) | Speedup |
+|------------|----------|---------|
+| **16**     | **0.02312** | **2.33×** |
+| 32         | 0.02349  | 2.29×   |
+| 64         | 0.03020  | 1.78×   |
+| 128        | 0.02783  | 1.94×   |
 
-#### Input/Output and Validation
+**Finding**: Block size **16** gives the best performance for these matrix dimensions, with block size 32 a close second. The commonly recommended block size of 64 (one cache line of doubles) was *not* optimal here. Smaller blocks keep the working set comfortably inside L1 cache, while at block size 64 and above the working set begins to spill out of L1.
 
-- Use the same input/output format as Assignment 1:
-    - Input files: `data/<case>/input0.raw` (matrix \( A \)) and `input1.raw` (matrix \( B \)).
-    - Output file: `data/<case>/result.raw` (matrix \( C \)).
-    - Reference file: `data/<case>/output.raw` for validation.
-- The executable accepts a case number (0–9) as a command-line argument.
-- Validate correctness by comparing `result.raw` with `output.raw` for each implementation.
+For the main results, block size 64 was kept as the default to follow the conventional "cache-line aligned" recommendation, but block size 16 or 32 would give meaningfully better speedups on this hardware.
 
----
+### Thread Count Experiment (Case 7)
 
-### Build Instructions
+To find the optimal thread count, `parallel_matmul` was tested with 1, 2, 4, and 8 threads. Each timing is averaged over 5 runs.
 
-- Use the provided `CMakeLists.txt` to build the project.
-- **Additional Requirements**:
-    - Ensure OpenMP is enabled in your compiler (e.g., `-fopenmp` for GCC).
-    - The provided CMake file includes OpenMP support.
-- **Windows Users**:
-    - Use CLion or Visual Studio with CMake.
-    - Alternatively, use MinGW with `cmake -G "MinGW Makefiles"` and `make`.
-- **Linux/Mac Users**:
-    - Make sure the GCC compiler is installed (`brew install gcc` on Mac).
-    - Configure CMake to use the correct compiler:
-      ```bash
-      cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ .
-      ```
-    - Run `cmake .` to generate a Makefile, then `make`.
-- **Testing OpenMP**:
-    - Set the number of threads using the environment variable `OMP_NUM_THREADS` (e.g., `export OMP_NUM_THREADS=4` on
-      Linux/Mac, or `set OMP_NUM_THREADS=4` on Windows).
-    - Test with different thread counts to find the best performance.
+| Threads | Time (s) | Speedup |
+|---------|----------|---------|
+| 1       | 0.03594  | 1.08×   |
+| **2**   | **0.02555** | **1.52×** |
+| 4       | 0.02713  | 1.43×   |
+| 8       | 0.03206  | 1.21×   |
 
----
+**Finding**: **2 threads is optimal** on this hardware. The GitHub Codespaces free tier provides 2 physical CPU cores; once thread count exceeds physical cores, hyperthreading contention and OpenMP scheduling overhead outweigh the parallelism benefit. 8 threads is *worse* than 1 thread because thread management overhead dominates.
 
-### Submission Requirements
+On a machine with 4 or more physical cores, the optimal thread count would shift accordingly.
 
-#### Fork and Clone the Repository
+### Analysis
 
-- Fork the Assignment 4 repository (provided separately).
-- Clone your fork:
-  ```bash
-  git clone https://github.com/AA-parallel-computing/Assignment-4-Optional.git
-  cd Assignment-4-Optional
-  ```
+**Correctness**: Every implementation produces identical results to the reference output for all 10 test cases.
 
-#### Create a New Branch
+**Cache Optimization (Blocked)**:
+- Blocking gives consistent **modest speedup (1.0× to 1.41×)** across cases with the default block size of 64.
+- The block size sweep showed up to **2.33×** speedup at block size 16, demonstrating the importance of tuning the block size to the specific cache hierarchy and problem dimensions.
 
-```bash
-git checkout -b student-name
-```
+**Parallel (OpenMP)**:
+- Parallelization helps **when the matrix is large enough** to amortize OpenMP thread setup overhead.
+- For tiny matrices (cases 0, 2, 4), parallel is *slower* than naive (0.52× to 0.92×) because thread creation cost exceeds the actual compute work.
+- For mid-sized matrices (cases 1, 3, 6, 8, 9), parallel gives 1.19× – 1.60× speedup.
+- The thread sweep revealed that the Codespaces 2-core environment caps the achievable parallel speedup at ~1.5× regardless of how many threads we request. On hardware with more cores, larger speedups would be visible.
 
-#### Implement Your Solution
+**Block Size Choice**: For these specific matrix sizes (up to approx. 256 × 300), L1 cache pressure dominates and smaller blocks (16, 32) work best. The "default" cache-line-sized block of 64 is suboptimal here but would likely be better on much larger problems where the trade-off shifts toward reducing loop overhead.
 
-- Modify the provided `main.cpp` to implement `blocked_matmul` and `parallel_matmul`.
-- Update `README.md` with your performance results table.
+**Optimal Configuration on Codespaces (2-core)**:
+- Block size: **16 or 32**
+- Thread count: **2**
+- Expected combined speedup over naive: approximately 3× or 4× by combining blocking and parallelization
 
-#### Commit and Push
+### Challenges
 
-```bash
-git add .
-git commit -m "student-name: Implemented optimized matrix multiplication"
-git push origin student-name
-```
+1. **Small Test Cases**: The provided test cases are too small to fully showcase OpenMP parallelism. The largest case (256 × 300 × 256) executes in ~33 ms, where OpenMP setup costs are significant relative to compute. Matrices of 1024 × 1024 or larger would yield speedups closer to the theoretical limits of the hardware.
 
-#### Submit a Pull Request (PR)
+2. **Codespaces Environment**: The 2-core CPU limit in GitHub Codespaces caps achievable parallel speedup. On a typical 8-core workstation, parallel speedups of 4× - 6× would be expected for the larger test cases.
 
-- Create a pull request from your branch to the base repository’s `main` branch.
-- Include a description of your optimizations and any challenges faced.
+3. **Measurement Stability**: Single-run timings showed significant variance (some "speedups" appeared to be slowdowns simply due to noise). Switching to 5-run averaging stabilized the results and made the patterns clear. This is itself a useful methodological finding.
 
----
+4. **Default Block Size Was Suboptimal**: The conventional block size of 64 (one cache line of doubles) was not the best for these test cases block size 16 was 30% faster. This reinforces that "cache-line aligned" is a starting heuristic, not a final answer; empirical tuning matters.
 
-### Grading (100 Points Total)
+5. **Text-format I/O**: The `.raw` files are space-separated text, not binary doubles. Reading is done using `ifstream >> double` with the first two integers as `rows cols` dimensions.
 
-| Subtask                                     | Points |
-|---------------------------------------------|--------|
-| Correct implementation of `blocked_matmul`  | 30     |
-| Correct implementation of `parallel_matmul` | 30     |
-| Accurate performance measurements           | 20     |
-| Performance results table in README.md      | 10     |
-| Code clarity, commenting, and organization  | 10     |
-| **Total**                                   | 100    |
-
----
-
-### Tips for Success
-
-- **Cache Optimization**:
-    - Experiment with different block sizes. Start with powers of 2 (e.g., 16, 32, 64).
-    - Use a block size that balances cache usage without excessive overhead.
-- **OpenMP**:
-    - Test with different thread counts to find the optimal number for your system.
-    - Be cautious of false sharing (when threads access nearby memory locations, causing cache coherence issues).
-- **Performance Measurement**:
-    - Run multiple iterations for each test case and report the average time to reduce variability.
-    - Ensure no other heavy processes are running during measurements.
-- **Debugging**:
-    - Validate each implementation against `output.raw` to ensure correctness before optimizing.
-    - Use small test cases to debug your blocked and parallel implementations.
-
-Good luck, and enjoy optimizing your matrix multiplication!
+6. **Local Toolchain**: Could not install g++ locally on Windows in time; switched to GitHub Codespaces, which provided a complete Linux dev environment with all required tooling.

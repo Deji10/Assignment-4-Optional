@@ -1,114 +1,208 @@
 #include <iostream>
 #include <fstream>
-#include <string>
-#include <omp.h>
+#include <cstdlib>
 #include <cmath>
+#include <string>
+#include <algorithm>
+#include <vector>
+#include <omp.h>
 
-void naive_matmul(float *C, float *A, float *B, uint32_t m, uint32_t n, uint32_t p) {
-    //TODO : Implement naive matrix multiplication
+using namespace std;
+
+const int NUM_RUNS = 5;  // Average over this many runs
+
+void naive_matmul(double *A, double *B, double *C, int m, int n, int p) {
+    for (int i = 0; i < m; i++) {
+        for (int j = 0; j < p; j++) {
+            C[i*p + j] = 0.0;
+            for (int k = 0; k < n; k++) {
+                C[i*p + j] += A[i*n + k] * B[k*p + j];
+            }
+        }
+    }
 }
 
-void blocked_matmul(float *C, float *A, float *B, uint32_t m, uint32_t n, uint32_t p, uint32_t block_size) {
-    // TODO: Implement blocked matrix multiplication
-    // A is m x n, B is n x p, C is m x p
-    // Use block_size to divide matrices into submatrices
+void blocked_matmul(double *A, double *B, double *C, int m, int n, int p, int bs) {
+    for (int i = 0; i < m*p; i++) C[i] = 0.0;
+    for (int ii = 0; ii < m; ii += bs) {
+        for (int jj = 0; jj < p; jj += bs) {
+            for (int kk = 0; kk < n; kk += bs) {
+                int ie = min(ii + bs, m);
+                int je = min(jj + bs, p);
+                int ke = min(kk + bs, n);
+                for (int i = ii; i < ie; i++) {
+                    for (int j = jj; j < je; j++) {
+                        for (int k = kk; k < ke; k++) {
+                            C[i*p + j] += A[i*n + k] * B[k*p + j];
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
-void parallel_matmul(float *C, float *A, float *B, uint32_t m, uint32_t n, uint32_t p) {
-    // TODO: Implement parallel matrix multiplication using OpenMP
-    // A is m x n, B is n x p, C is m x p
+void parallel_matmul(double *A, double *B, double *C, int m, int n, int p) {
+    #pragma omp parallel for collapse(2)
+    for (int i = 0; i < m; i++) {
+        for (int j = 0; j < p; j++) {
+            C[i*p + j] = 0.0;
+            for (int k = 0; k < n; k++) {
+                C[i*p + j] += A[i*n + k] * B[k*p + j];
+            }
+        }
+    }
 }
 
-bool validate_result(const std::string &result_file, const std::string &reference_file) {
-   //TODO : Implement result validation
+double* read_matrix(const string& filename, int& rows, int& cols) {
+    ifstream file(filename);
+    if (!file) { cerr << "Cannot open " << filename << endl; exit(1); }
+    file >> rows >> cols;
+    double* M = (double*)malloc(rows * cols * sizeof(double));
+    for (int i = 0; i < rows * cols; i++) file >> M[i];
+    return M;
+}
+
+bool validate(double *C, double *Cref, int m, int p, double eps = 1e-2) {
+    for (int i = 0; i < m * p; i++)
+        if (fabs(C[i] - Cref[i]) > eps) return false;
+    return true;
+}
+
+double avg(const vector<double>& v) {
+    double s = 0;
+    for (double t : v) s += t;
+    return s / v.size();
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <case_number>" << std::endl;
+    if (argc < 2) {
+        cerr << "Usage: " << argv[0] << " <case 0-9> [mode]" << endl;
+        cerr << "  mode: default | blocks | threads" << endl;
         return 1;
     }
 
-    int case_number = std::atoi(argv[1]);
-    if (case_number < 0 || case_number > 9) {
-        std::cerr << "Case number must be between 0 and 9" << std::endl;
-        return 1;
+    int cn = atoi(argv[1]);
+    string mode = (argc > 2) ? argv[2] : "default";
+
+    string pA = "data/" + to_string(cn) + "/input0.raw";
+    string pB = "data/" + to_string(cn) + "/input1.raw";
+    string pC = "data/" + to_string(cn) + "/output.raw";
+
+    int m, nA, nB, p, mo, po;
+    double *A = read_matrix(pA, m, nA);
+    double *B = read_matrix(pB, nB, p);
+    double *Cref = read_matrix(pC, mo, po);
+    int n = nA;
+
+    if (nA != nB) { cerr << "Dimension mismatch" << endl; return 1; }
+
+    double *Cn = (double*)malloc(m * p * sizeof(double));
+    double *Cb = (double*)malloc(m * p * sizeof(double));
+    double *Cp = (double*)malloc(m * p * sizeof(double));
+
+    if (mode == "blocks") {
+        cout << "=== Block Size Sweep, Case " << cn
+             << ": A(" << m << "x" << n << ") * B(" << n << "x" << p
+             << "), avg of " << NUM_RUNS << " runs ===" << endl;
+        vector<double> tn;
+        for (int r = 0; r < NUM_RUNS; r++) {
+            double t0 = omp_get_wtime();
+            naive_matmul(A, B, Cn, m, n, p);
+            tn.push_back(omp_get_wtime() - t0);
+        }
+        double na = avg(tn);
+        cout << "Naive baseline: " << na << " s" << endl;
+        cout << "Block Size | Time (s) | Speedup | Valid" << endl;
+        int sizes[] = {16, 32, 64, 128};
+        for (int bs : sizes) {
+            vector<double> tb;
+            bool ok = true;
+            for (int r = 0; r < NUM_RUNS; r++) {
+                double t0 = omp_get_wtime();
+                blocked_matmul(A, B, Cb, m, n, p, bs);
+                tb.push_back(omp_get_wtime() - t0);
+                if (r == 0) ok = validate(Cb, Cref, m, p);
+            }
+            double a = avg(tb);
+            cout << "    " << bs << "     | " << a << " | "
+                 << na/a << "x | " << (ok ? "OK" : "FAIL") << endl;
+        }
+    }
+    else if (mode == "threads") {
+        cout << "=== Thread Count Sweep, Case " << cn
+             << ": A(" << m << "x" << n << ") * B(" << n << "x" << p
+             << "), avg of " << NUM_RUNS << " runs ===" << endl;
+        vector<double> tn;
+        for (int r = 0; r < NUM_RUNS; r++) {
+            double t0 = omp_get_wtime();
+            naive_matmul(A, B, Cn, m, n, p);
+            tn.push_back(omp_get_wtime() - t0);
+        }
+        double na = avg(tn);
+        cout << "Naive baseline: " << na << " s" << endl;
+        cout << "Threads | Time (s) | Speedup | Valid" << endl;
+        int threads[] = {1, 2, 4, 8};
+        for (int tc : threads) {
+            omp_set_num_threads(tc);
+            vector<double> tp;
+            bool ok = true;
+            for (int r = 0; r < NUM_RUNS; r++) {
+                double t0 = omp_get_wtime();
+                parallel_matmul(A, B, Cp, m, n, p);
+                tp.push_back(omp_get_wtime() - t0);
+                if (r == 0) ok = validate(Cp, Cref, m, p);
+            }
+            double a = avg(tp);
+            cout << "   " << tc << "    | " << a << " | "
+                 << na/a << "x | " << (ok ? "OK" : "FAIL") << endl;
+        }
+    }
+    else {
+        // Default mode: all 3 implementations with averaging
+        omp_set_num_threads(4);
+        vector<double> tn, tb, tp;
+        bool ok_n = true, ok_b = true, ok_p = true;
+
+        for (int r = 0; r < NUM_RUNS; r++) {
+            double t0;
+            t0 = omp_get_wtime();
+            naive_matmul(A, B, Cn, m, n, p);
+            tn.push_back(omp_get_wtime() - t0);
+            if (r == 0) ok_n = validate(Cn, Cref, m, p);
+
+            t0 = omp_get_wtime();
+            blocked_matmul(A, B, Cb, m, n, p, 64);
+            tb.push_back(omp_get_wtime() - t0);
+            if (r == 0) ok_b = validate(Cb, Cref, m, p);
+
+            t0 = omp_get_wtime();
+            parallel_matmul(A, B, Cp, m, n, p);
+            tp.push_back(omp_get_wtime() - t0);
+            if (r == 0) ok_p = validate(Cp, Cref, m, p);
+        }
+
+        double an = avg(tn), ab = avg(tb), ap = avg(tp);
+
+        cout << "Case " << cn << ": A(" << m << "x" << n << ") * B("
+             << n << "x" << p << "), avg of " << NUM_RUNS << " runs" << endl;
+        cout << "  Naive:    " << an << " s (" << (ok_n ? "OK" : "FAIL") << ")" << endl;
+        cout << "  Blocked:  " << ab << " s (" << (ok_b ? "OK" : "FAIL")
+             << ") speedup: " << an/ab << "x" << endl;
+        cout << "  Parallel: " << ap << " s (" << (ok_p ? "OK" : "FAIL")
+             << ") speedup: " << an/ap << "x" << endl;
+
+        string rp = "data/" + to_string(cn) + "/result.raw";
+        ofstream out(rp);
+        out << m << " " << p << endl;
+        for (int i = 0; i < m * p; i++) {
+            out << Cp[i];
+            if ((i + 1) % p == 0) out << endl;
+            else out << " ";
+        }
     }
 
-    // Construct file paths
-    std::string folder = "data/" + std::to_string(case_number) + "/";
-    std::string input0_file = folder + "input0.raw";
-    std::string input1_file = folder + "input1.raw";
-    std::string result_file = folder + "result.raw";
-    std::string reference_file = folder + "output.raw";
-
-    // TODO Read input0.raw (matrix A)
-
-
-    // TODO Read input1.raw (matrix B)
-
-
-    // Allocate memory for result matrices
-    float *C_naive = new float[m * p];
-    float *C_blocked = new float[m * p];
-    float *C_parallel = new float[m * p];
-
-    // Measure performance of naive_matmul
-    double start_time = omp_get_wtime();
-    naive_matmul(C_naive, A, B, m, n, p);
-    double naive_time = omp_get_wtime() - start_time;
-
-    // TODO Write naive result to file
-
-
-    // Validate naive result
-    bool naive_correct = validate_result(result_file, reference_file);
-    if (!naive_correct) {
-        std::cerr << "Naive result validation failed for case " << case_number << std::endl;
-    }
-
-    // Measure performance of blocked_matmul (use block_size = 32 as default)
-    start_time = omp_get_wtime();
-    blocked_matmul(C_blocked, A, B, m, n, p, 32);
-    double blocked_time = omp_get_wtime() - start_time;
-
-    // TODO Write blocked result to file
-
-
-    // Validate blocked result
-    bool blocked_correct = validate_result(result_file, reference_file);
-    if (!blocked_correct) {
-        std::cerr << "Blocked result validation failed for case " << case_number << std::endl;
-    }
-
-    // Measure performance of parallel_matmul
-    start_time = omp_get_wtime();
-    parallel_matmul(C_parallel, A, B, m, n, p);
-    double parallel_time = omp_get_wtime() - start_time;
-
-    // TODO Write parallel result to file
-
-
-    // Validate parallel result
-    bool parallel_correct = validate_result(result_file, reference_file);
-    if (!parallel_correct) {
-        std::cerr << "Parallel result validation failed for case " << case_number << std::endl;
-    }
-
-    // Print performance results
-    std::cout << "Case " << case_number << " (" << m << "x" << n << "x" << p << "):\n";
-    std::cout << "Naive time: " << naive_time << " seconds\n";
-    std::cout << "Blocked time: " << blocked_time << " seconds\n";
-    std::cout << "Parallel time: " << parallel_time << " seconds\n";
-    std::cout << "Blocked speedup: " << (naive_time / blocked_time) << "x\n";
-    std::cout << "Parallel speedup: " << (naive_time / parallel_time) << "x\n";
-
-    // Clean up
-    delete[] A;
-    delete[] B;
-    delete[] C_naive;
-    delete[] C_blocked;
-    delete[] C_parallel;
-
+    free(A); free(B); free(Cref);
+    free(Cn); free(Cb); free(Cp);
     return 0;
 }
